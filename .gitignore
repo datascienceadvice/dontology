@@ -2,7 +2,6 @@
 .Rhistory
 .RData
 .Ruserdata
-inst/doc
 *.docx
 *.pdf
 *.sqlite
