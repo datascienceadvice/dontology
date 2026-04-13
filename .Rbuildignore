@@ -6,6 +6,7 @@
 ^.*\.pdf$
 ^.*\.json$
 ^.*\.sqlite$
+vignettes\plots\*.*$
 start.R$
 test.R$
 copy.R$
