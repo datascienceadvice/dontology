@@ -1,0 +1,19 @@
+---
+title: "lab_ontology_construction"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{lab_ontology_construction}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(dontology)
+```

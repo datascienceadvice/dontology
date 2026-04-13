@@ -1,0 +1,12 @@
+^dontology\.Rproj$
+^\.Rproj\.user$
+^LICENSE\.md$
+^LICENSE\.md$
+^.*\.docx$
+^.*\.pdf$
+^.*\.json$
+^.*\.sqlite$
+start.R$
+test.R$
+copy.R$
+.lintr$

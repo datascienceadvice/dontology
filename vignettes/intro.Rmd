@@ -1,0 +1,186 @@
+---
+title: "Introduction to dontology"
+author: "Package Developer"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to dontology}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Overview
+
+`dontology` is an R package designed for the structured management of pharmaceutical documentation. It uses an ontological approach to treat documents not as flat text files, but as hierarchical trees of entities stored in a relational database (SQLite). 
+
+Key features include:
+- **Hierarchical Rendering**: Styled hierarchical headers and Markdown generation.
+- **EAV Metadata Model**: Store arbitrary attributes, data frames (tables), and plots within document sections.
+- **Audit Trail**: Built-in tracking of `created_by` and `updated_at` for every entity.
+- **Interoperability**: Export/Import entire document hierarchies via JSON for Git version control.
+
+## 1. Environment Setup
+
+The system requires an active SQLite connection. All structural constraints and base classes are defined during the schema initialization.
+
+```{r setup}
+library(dontology)
+library(DBI)
+library(RSQLite)
+
+# Create an in-memory database for demonstration
+con <- dbConnect(SQLite(), ":memory:")
+
+# Initialize the schema (tables, triggers, and mandatory seeds)
+create_schema(con)
+```
+
+## 2. Building a Document Hierarchy
+
+Documents are managed via the `DocumentInstance` R6 class, which inherits from the base `Entity` class.
+
+### Manual Construction
+You can build a document step-by-step using the `add_child` helper function.
+
+```{r hierarchy}
+# 1. Create the root document
+doc <- DocumentInstance$new("PROT_2024_001", con, "Clinical Protocol", class_id = "Document")
+doc$set_prop("version", "1.0.2")
+doc$set_prop("status", "Draft")
+
+# 2. Add high-level sections
+sec1 <- add_child(doc, "SEC_1", "Introduction")
+sec1$set_prop("content", "This protocol describes the phase II study of drug X.")
+
+# 3. Add nested sub-sections
+sub_sec <- add_child(sec1, "SEC_1_1", "Study Objectives")
+sub_sec$set_prop("content", "The primary objective is to evaluate safety and efficacy.")
+
+# Persist all changes to the database
+doc$save()
+```
+
+### Programmatic Construction
+For large structures (like CTD or complex validation reports), you can build the hierarchy from a nested list.
+
+```{r build_from_list}
+template <- list(
+  "SEC_MAT" = list(label = "Materials", children = list(
+    "SUB_REAG" = list(label = "Reagents"),
+    "SUB_EQUIP" = list(label = "Equipment")
+  )),
+  "SEC_PROC" = list(label = "Procedure")
+)
+
+build_from_list(doc, template)
+doc$save()
+```
+
+## 3. Managing Content (Tables and Plots)
+
+The package handles complex metadata by serializing data frames to JSON and saving plots to disk while maintaining a reference in the database.
+
+```{r content}
+# Navigate to a specific section
+results_sec <- add_child(doc, "SEC_RES", "Experimental Results")
+
+# Store a data.frame as a table
+stability_data <- data.frame(
+  Timepoint = c("Initial", "3 Months", "6 Months"),
+  Assay = c(100.1, 99.8, 99.2),
+  pH = c(7.0, 7.0, 6.9)
+)
+results_sec$set_table("table_data", stability_data)
+
+# Store a plot (requires ggplot2)
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  library(ggplot2)
+  p <- ggplot(stability_data, aes(x = Timepoint, y = Assay)) + 
+       geom_line(group = 1) + geom_point() +
+       theme_minimal()
+  
+  results_sec$set_plot(p)
+}
+
+results_sec$set_prop("content", "I am referring to the [Result section](#SEC_RES).")
+
+results_sec$save()
+```
+
+## 4. Reusing Standard Clauses
+
+To maintain consistency across multiple documents, `dontology` provides a library of standardized text blocks.
+
+```{r library}
+# Initialize the library with predefined pharma clauses
+init_standard_library(con)
+
+# Link a 'Cold Storage' clause to our document via a semantic relation
+# This avoids text duplication and ensures regulatory compliance
+doc$add_relation("contains", "STP_STORAGE_COLD", sort_order = 99)
+doc$save()
+```
+
+## 5. Validation and Export
+
+The `render()` method generates Markdown. Since we use `normalizePath()` for images, Pandoc will correctly embed plots into the final document regardless of where the export command is called.
+
+```{r render_export}
+# 1. Preview the Markdown (without numbers)
+cat(doc$render())
+
+# 2. Export to Word in a temporary directory
+# We use tempdir() to keep the project clean during vignette building
+tmp_docx <- file.path(tempdir(), "Clinical_Protocol.docx")
+tmp_md <- file.path(tempdir(), "Clinical_Protocol.md")
+
+export_document(doc, format = "md", file_path = tmp_md)
+export_document(doc, format = "word", file_path = tmp_docx)
+
+# Verify the file was created
+if (file.exists(tmp_docx)) {
+  message("Word document successfully created at: ", tmp_docx)
+}
+```
+
+## 6. Traceability and Audit Trail
+
+Every `Entity` automatically tracks its creator and the time of the last modification.
+
+```{r audit}
+# Query the audit trail directly from the database
+audit_log <- dbGetQuery(con, "
+  SELECT instance_id, label, created_by, updated_at, updated_by 
+  FROM instances 
+  WHERE instance_id IN ('PROT_2024_001', 'SEC_1')
+")
+
+knitr::kable(audit_log)
+```
+
+## 7. Interoperability (JSON Serialization)
+
+The entire document tree can be exported to a single JSON file. This is ideal for sharing templates or using Git for version control of clinical documents.
+
+```{r serialization}
+# Export the full hierarchy to a file
+export_to_json(doc, "protocol_snapshot.json")
+
+# Import the hierarchy into a fresh database environment
+# new_con <- dbConnect(SQLite(), ":memory:")
+# create_schema(new_con)
+# import_from_json("protocol_snapshot.json", new_con)
+```
+
+```{r cleanup, include = FALSE}
+# Cleanup logic for the vignette
+if (file.exists("protocol_snapshot.json")) unlink("protocol_snapshot.json")
+dbDisconnect(con)
+```
