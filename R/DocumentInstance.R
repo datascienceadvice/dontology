@@ -98,7 +98,12 @@ DocumentInstance <- R6::R6Class(
           # Convert relative path to absolute path so Pandoc can find it
           # winslash = "/" is important for cross-platform compatibility
           abs_path <- normalizePath(plot_path, winslash = "/", mustWork = FALSE)
-          output <- paste0(output, "![", label_text, "](", abs_path, ")\n\n")
+          output <- paste0(
+            output,
+            "::: {custom-style=\"Figure\"}\n",
+            "![", label_text, "](", abs_path, ")\n",
+            ":::\n\n"
+          )
         }
 
         # Recursion

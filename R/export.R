@@ -43,11 +43,9 @@ export_document <- function(doc, format = "word", file_path) {
   # 2. Setup format (No more "else" fall-through for unknown formats)
   if (format == "word") {
     tbl_filter <- system.file("lua", "table-filter.lua", package = "dontology")
-    img_filter <- system.file("lua", "image-filter.lua", package = "dontology")
     style_path <- system.file("templates", "styles.docx", package = "dontology")
 
     p_args <- c()
-    if (file.exists(img_filter)) p_args <- c(p_args, "--lua-filter", img_filter)
     if (file.exists(tbl_filter)) p_args <- c(p_args, "--lua-filter", tbl_filter)
 
     output_fmt <- rmarkdown::word_document(
@@ -69,8 +67,8 @@ export_document <- function(doc, format = "word", file_path) {
   rmarkdown::render(
     input = temp_md,
     output_format = output_fmt,
-    output_file = basename(file_path),
-    output_dir = dirname(file_path),
+    output_file   = basename(file_path),
+    output_dir    = dirname(file_path),
     quiet = TRUE
   )
 

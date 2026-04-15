@@ -12,7 +12,7 @@ Inherits core database and attribute functionality from \code{\link{Entity}}.
 \code{\link{Entity}}
 }
 \section{Super class}{
-\code{dontology::Entity} -> \code{DocumentInstance}
+\code{\link[dontology:Entity]{dontology::Entity}} -> \code{DocumentInstance}
 }
 \section{Methods}{
 \subsection{Public methods}{

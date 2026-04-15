@@ -139,9 +139,7 @@ cat(doc$render())
 # 2. Export to Word in a temporary directory
 # We use tempdir() to keep the project clean during vignette building
 tmp_docx <- file.path(tempdir(), "Clinical_Protocol.docx")
-tmp_md <- file.path(tempdir(), "Clinical_Protocol.md")
 
-export_document(doc, format = "md", file_path = tmp_md)
 export_document(doc, format = "word", file_path = tmp_docx)
 
 # Verify the file was created
