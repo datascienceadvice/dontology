@@ -32,11 +32,7 @@ export_to_json <- function(doc, file_path) {
 
     if (nrow(res) > 0) {
       for (cid in res$object_id) {
-        # Initialize the child entity to explore its subtree
-        # Using Entity$new ensures the class is found within the package namespace
-        child_entity <- Entity$new(cid, entity$con)
-
-        # Recursive call to process children
+        child_entity <- .instantiate_entity(cid, entity$con)
         node$children[[cid]] <- build_list_tree(child_entity)
       }
     }
@@ -71,7 +67,12 @@ export_to_json <- function(doc, file_path) {
 #' @importFrom jsonlite fromJSON
 #' @export
 import_from_json <- function(file_path, con) {
+  if (!file.exists(file_path)) {
+    stop(paste0("JSON file not found at: ", normalizePath(file_path, mustWork = FALSE)))
+  }
+
   # Load JSON data into a nested list
+  json_text <- readLines(file_path, warn = FALSE, encoding = "UTF-8")
   data <- jsonlite::fromJSON(file_path, simplifyVector = FALSE)
 
   # Recursive internal function to persist nodes and relations to the database

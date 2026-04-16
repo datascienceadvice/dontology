@@ -13,7 +13,7 @@
 #' @importFrom DBI dbGetQuery
 #' @export
 find_instances <- function(con, class_id = NULL, pattern = NULL) {
-  query <- "SELECT instance_id, class_id FROM instances WHERE 1=1"
+  query <- "SELECT instance_id FROM instances WHERE 1=1"
   params <- list()
 
   if (!is.null(class_id)) {
@@ -27,16 +27,11 @@ find_instances <- function(con, class_id = NULL, pattern = NULL) {
   }
 
   res <- DBI::dbGetQuery(con, query, params = params)
-
   if (nrow(res) == 0) return(list())
 
-  # Instantiate the correct R6 class based on the class_id stored in the database
-  lapply(1:nrow(res), function(i) {
-    if (res$class_id[i] == "Document") {
-      DocumentInstance$new(res$instance_id[i], con)
-    } else {
-      Entity$new(res$instance_id[i], con)
-    }
+  # Используем фабрику для каждого найденного ID
+  lapply(res$instance_id, function(id) {
+    .instantiate_entity(id, con)
   })
 }
 
@@ -104,3 +99,4 @@ search_content <- function(con, term) {
   res <- DBI::dbGetQuery(con, query, params = list(paste0("%", term, "%")))
   return(res)
 }
+

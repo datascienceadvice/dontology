@@ -135,6 +135,20 @@ Entity <- R6::R6Class(
     },
 
     #' @description
+    #' Retrieve the audit trail for this specific instance.
+    #' @return A data.frame with columns user_id, action, and timestamp.
+    get_history = function() {
+      query <- "
+        SELECT user_id, action, timestamp
+        FROM audit_log
+        WHERE instance_id = ?
+        ORDER BY timestamp DESC"
+
+      res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
+      return(res)
+    },
+
+    #' @description
     #' Load instance state from the SQLite database.
     load = function() {
       res <- DBI::dbGetQuery(self$con,
@@ -170,11 +184,23 @@ Entity <- R6::R6Class(
     #' Save instance state to the SQLite database.
     #' Uses a transaction to ensure atomic updates across multiple tables.
     save = function() {
+      res_status <- DBI::dbGetQuery(self$con,
+                                    "SELECT value FROM attributes WHERE instance_id = ? AND property_id = 'status'",
+                                    params = list(self$id))
+
+      if (nrow(res_status) > 0 && toupper(res_status$value) == "FINAL") {
+        stop(paste0("DATA INTEGRITY ERROR: [", self$id, "] is APPROVED/FINAL. Modification denied."))
+      }
+
       # Get current system user
       curr_user <- Sys.getenv("DONTOLOGY_USER", unset = Sys.info()[["user"]])
 
       tryCatch({
         DBI::dbWithTransaction(self$con, {
+          res_exists <- DBI::dbGetQuery(self$con,
+                                        "SELECT 1 FROM instances WHERE instance_id = ?", params = list(self$id))
+          action_type <- if (nrow(res_exists) > 0) "UPDATE" else "CREATE"
+
           # 1. Instances
           c_label <- if (is.null(self$label) || is.na(self$label)) "Untitled" else as.character(self$label)[1]
           c_class <- if (is.null(self$class_id) || is.na(self$class_id)) "Entity" else as.character(self$class_id)[1]
@@ -217,6 +243,11 @@ Entity <- R6::R6Class(
               }
             }
           }
+
+          DBI::dbExecute(self$con,
+                         "INSERT INTO audit_log (instance_id, user_id, action) VALUES (?, ?, ?)",
+                         params = list(self$id, curr_user, action_type)
+          )
         })
       }, error = function(e) {
         stop(paste0("FAIL TO SAVE [", self$id, "]: ", e$message))

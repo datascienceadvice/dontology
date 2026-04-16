@@ -25,6 +25,9 @@ usethis::use_r("serialization")
 usethis::use_r("predef_lab")
 usethis::use_r("query")
 usethis::use_r("export")
+usethis::use_r("utils")
+usethis::use_r("diff")
+usethis::use_r("report_gen")
 
 
 usethis::use_test("DocumentInstance")

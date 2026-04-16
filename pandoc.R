@@ -49,8 +49,8 @@
 rmarkdown::render(
   input = "D:/temp.md",
   output_format = rmarkdown::word_document(
-    reference_docx = normalizePath("inst/templates/styles.docx", winslash = "/")
-    #reference_docx = normalizePath("custom-reference.docx", winslash = "/")
+    reference_docx = normalizePath("inst/templates/styles.docx", winslash = "/"),
+    pandoc_args = c("--lua-filter", normalizePath("inst/lua/table-filter.lua", winslash = "/"))
   ),
   output_file = "md.docx",
   output_dir = "D:/Projects/dontology/",

@@ -1,4 +1,4 @@
-local tablestyle = "TableCustom"
+local tablestyle = "Table"
 
 function Table(elem)
 

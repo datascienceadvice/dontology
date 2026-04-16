@@ -74,4 +74,13 @@ create_schema <- function(con) {
   for (prp in props) {
     DBI::dbExecute(con, "INSERT OR IGNORE INTO ont_properties (property_id, value_type) VALUES (?, 'text')", params = list(prp))
   }
+
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS audit_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT,
+    user_id TEXT,
+    action TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
+  );")
 }

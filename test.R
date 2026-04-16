@@ -239,7 +239,158 @@ for (s in sections) {
 # Теперь проверим, что восстановленный документ может напечатать сам себя
 export_document(restored_doc, format = "word", file_path = "Restored_Spec.docx")
 
-dbDisconnect(con)
+DBI::dbDisconnect(con)
+
+# ------------------------------------------------------------------------------
+library(dontology)
+library(DBI)
+library(RSQLite)
+
+db_file <- "pharma_data.sqlite"
+if (file.exists(db_file)) file.remove(db_file)
+con <- dbConnect(SQLite(), db_file)
+create_schema(con)
+doc <- DocumentInstance$new("DOC_001", con, "Protocol v1")
+doc$save()
+
+# Делаем изменения
+doc$label <- "Protocol v2"
+doc$set_prop("status", "Review")
+doc$save()
+
+# Смотрим историю
+history <- doc$get_history()
+print(history)
+
+DBI::dbDisconnect(con)
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), db_file)
+
+# 1. Создаем/загружаем документ (Базовая версия)
+doc <- DocumentInstance$new("PROT_001", con)
+doc$label <- "Original Protocol 2023"
+doc$set_prop("version", "1.0")
+doc$save()
+
+# 2. Экспортируем "Снимок" (Snapshot) — это наша точка отсчета
+export_to_json(doc, "D:/protocol2023.json")
+
+# 3. ТЕПЕРЬ ВНОСИМ ИЗМЕНЕНИЯ
+# Изменяем заголовок
+doc$label <- "Revised Protocol 2024 (v2)"
+
+# Изменяем метаданные (версию и статус)
+doc$set_prop("version", "2.0")
+doc$set_prop("status", "In Review")
+
+# Добавляем новую секцию (структурное изменение)
+add_child(doc, "SEC_NEW", "New Safety Assessment Section")
+
+# Сохраняем изменения в основную базу
+doc$save()
+
+# 4. ЗАПУСКАЕМ СРАВНЕНИЕ
+# Сравниваем ТЕКУЩЕЕ состояние в базе с тем, что мы сохранили в файле D:/protocol2023.json
+changes <- doc$compare_with_snapshot("D:/protocol2023.json")
+
+# 5. ВЫВОДИМ РЕЗУЛЬТАТ
+cat(render_diff_markdown(changes))
+
+# В конце закрываем соединение
+DBI::dbDisconnect(con)
+
+# ------------------------------------------------------------------------------
+library(DBI)
+library(RSQLite)
+
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con) # Твоя функция инициализации БД
+
+# --- ШАГ 1: СОЗДАНИЕ ДОКУМЕНТА (DRAFT) ---
+doc <- DocumentInstance$new("REPORT_001", con, "Stability Report: {{product}}")
+doc$set_prop("product", "Insulin-X")
+doc$set_prop("status", "DRAFT")
+doc$save()
+
+# Создаем вложенную структуру
+sec_intro <- add_child(doc, "SEC_1", "Introduction")
+sec_details <- add_child(sec_intro, "SEC_1_1", "Technical Details")
+sec_details$set_prop("content", "Initial study of {{product}}.")
+sec_details$save()
+
+# --- ШАГ 2: ЭКСПОРТ "ЗОЛОТОГО СТАНДАРТА" (SNAPSHOT) ---
+# Это версия v1.0, которую мы зафиксируем в JSON
+snapshot_file <- "report_v1.json"
+export_to_json(doc, snapshot_file)
+message("Snapshot v1.0 saved!")
+
+# --- ШАГ 3: ВНЕСЕНИЕ ГЛУБОКИХ ИЗМЕНЕНИЙ ---
+# 1. Меняем метаданные в корне
+doc$set_prop("product", "Insulin-X (Improved)")
+doc$save()
+
+# 2. Меняем текст глубоко внутри (на уровне 1.1)
+# Мы используем фабрику, чтобы найти объект в базе
+deep_sec <- .instantiate_entity("SEC_1_1", con)
+deep_sec$set_prop("content", "Updated study with new stability parameters.")
+deep_sec$save()
+
+# --- ШАГ 4: ЗАПУСК ГЛУБОКОГО СРАВНЕНИЯ ---
+# Мы хотим увидеть разницу между тем, что в базе, и снимком v1.0
+# Вызываем наш новый рекурсивный дифф
+changes <- doc$compare_with_snapshot(snapshot_file)
+
+message("\n--- DETECTED CHANGES ---")
+print(changes[, c("path", "key", "status", "old_value", "new_value")])
+# Ты увидишь изменения и в корне, и в SEC_1_1 (хотя сравнивал только корень)!
+
+# --- ШАГ 5: РЕНДЕРИНГ С ПЛЕЙСХОЛДЕРАМИ ---
+# Проверим, как Insulin-X (Improved) подставился во все секции
+cat("\n--- RENDERED MARKDOWN ---\n")
+cat(doc$render())
+
+# --- ШАГ 6: УСТАНОВКА СТАТУСА FINAL И БЛОКИРОВКА ---
+doc$set_prop("status", "FINAL")
+doc$save()
+message("\nDocument status set to FINAL.")
+
+# ПОПЫТКА ИЗМЕНЕНИЯ (Должна провалиться)
+tryCatch({
+  doc$label <- "Hack the report"
+  doc$save()
+}, error = function(e) {
+  message("\nBLOCKER WORKS: ", e$message)
+})
+
+# --- ШАГ 7: ПРОСМОТР ИСТОРИИ (AUDIT TRAIL) ---
+message("\n--- AUDIT TRAIL FOR SEC_1_1 ---")
+print(deep_sec$get_history())
+
+DBI::dbDisconnect(con)
+
+# ------------------------------------------------------------------------------
+
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con) # Твоя функция инициализации БД
+# --- Контроль версий ---
+doc <- DocumentInstance$new("PROT_01", con, "Protocol")
+doc$set_prop("version", "1.0")
+doc$save()
+
+doc$bump_version("minor") # Изменит на 1.1
+doc$bump_version("major") # Изменит на 2.0
+
+# --- Валидация связей ---
+# Создаем секцию с битой ссылкой
+sec <- add_child(doc, "SEC_1", "Introduction")
+sec$set_prop("content", "As shown in [Results](#sec-MISSING_ID)...") # ID не существует
+sec$save()
+
+# Запускаем валидацию
+doc$validate()
+# Выдаст: WARNING: BROKEN LINK: Reference to #sec-MISSING_ID not found in database.
+DBI::dbDisconnect(con)
+# ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
