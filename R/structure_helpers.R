@@ -85,3 +85,46 @@ build_from_list <- function(parent, structure_list) {
   }
   return(invisible(NULL))
 }
+
+
+
+#' Print Entity Hierarchy Tree
+#'
+#' @description
+#' A diagnostic utility that prints a visual representation of the
+#' document/section hierarchy to the console.
+#'
+#' @param entity The root R6 \code{Entity} or \code{DocumentInstance} to start from.
+#' @param level Integer. Internal parameter for indentation depth.
+#'
+#' @return Invisible NULL.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' print_tree(my_doc)
+#' }
+print_tree <- function(entity, level = 0) {
+  # Создаем отступ в зависимости от глубины
+  indent <- paste(rep("  ", level), collapse = "")
+
+  # Формируем строку: [ID] Label (Class)
+  cat(sprintf("%s[%s] %s (Class: %s)\n",
+              indent,
+              entity$id,
+              entity$label,
+              entity$class_id))
+
+  # Получаем всех детей через связь 'contains'
+  # Мы используем нашу функцию get_related, которая уже есть в этом файле
+  children <- get_related(entity, "contains")
+
+  if (length(children) > 0) {
+    for (child in children) {
+      # Рекурсивный вызов для каждого ребенка
+      print_tree(child, level + 1)
+    }
+  }
+
+  return(invisible(NULL))
+}

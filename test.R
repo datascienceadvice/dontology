@@ -390,6 +390,141 @@ sec$save()
 doc$validate()
 # Выдаст: WARNING: BROKEN LINK: Reference to #sec-MISSING_ID not found in database.
 DBI::dbDisconnect(con)
+
+# sign -------------------------------------------------------------------------
+# --- ПОДГОТОВКА ---
+library(DBI)
+library(RSQLite)
+
+# 1. Создаем базу в памяти и инициализируем схему
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
+
+# 2. Создаем документ (Draft v1.0)
+doc <- DocumentInstance$new("REP_2024", con, "Stability Report: {{compound}}")
+doc$set_prop("compound", "Drug-Alpha")
+doc$set_prop("version", "1.0")
+doc$set_prop("status", "DRAFT")
+doc$save()
+
+# --- ШАГ 1: СОЗДАНИЕ СТРУКТУРЫ И ССЫЛОК ---
+
+# Создаем Секцию 1
+sec1 <- add_child(doc, "SEC_INTRO", "Introduction")
+sec1$set_prop("content", "This report analyzes {{compound}}. See results in [Detailed Data](#sec-DATA).")
+sec1$save()
+
+# Создаем Секцию 2 (Цель ссылки)
+sec2 <- add_child(doc, "DATA", "Detailed Data")
+sec2$set_prop("content", "Stability at 25C was within limits.")
+sec2$save()
+
+# --- ШАГ 2: ВАЛИДАЦИЯ ---
+
+message("\n[Validation Test]")
+# Если мы сейчас удалим секцию DATA, валидация ссылок выдаст предупреждение
+if(doc$validate()) {
+  message("Validation successful: All sections exist and links are intact.")
+}
+
+# --- ШАГ 3: КОНТРОЛЬ ВЕРСИЙ (Bump Version) ---
+
+message("\n[Versioning Test]")
+doc$bump_version("minor") # Теперь версия 1.1
+# В Audit Trail теперь будет видно изменение версии
+
+# --- ШАГ 4: ЭЛЕКТРОННЫЕ ПОДПИСИ ---
+
+message("\n[Signature Test]")
+# Симулируем подпись автора
+Sys.setenv("DONTOLOGY_USER" = "Scientist_A")
+doc$sign(role = "Author", meaning = "Data collection complete")
+
+# Симулируем подпись проверяющего (Approver)
+Sys.setenv("DONTOLOGY_USER" = "QC_Manager")
+doc$sign(role = "Approver", meaning = "Reviewed and Approved")
+# ВНИМАНИЕ: Подпись Approver автоматически ставит статус FINAL и блокирует документ
+
+# --- ШАГ 5: ПРОВЕРКА ЦЕЛОСТНОСТИ (Locking) ---
+
+message("\n[Data Integrity Test]")
+tryCatch({
+  doc$set_prop("compound", "Cheat-Drug") # Пытаемся изменить данные в финальном отчете
+  doc$save()
+}, error = function(e) {
+  message("BLOCKER ACTIVE: ", e$message)
+})
+
+# --- ШАГ 6: ФИНАЛЬНЫЙ РЕНДЕРИНГ ---
+
+message("\n[Final Rendering Output]")
+report_md <- doc$render()
+cat(report_md)
+
+# --- ШАГ 7: ПРОСМОТР ЖУРНАЛА АУДИТА ---
+
+message("\n[Audit Trail for Document]")
+print(doc$get_history())
+
+dbDisconnect(con)
+
+# template ---------------------------------------------------------------------
+library(DBI)
+library(RSQLite)
+
+# 1. Создаем базу в памяти и инициализируем схему
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
+
+# Создаем структуру-эталон
+tmp <- DocumentInstance$new("TPL_STABILITY", con, "TEMPLATE: Stability Report", "Document")
+tmp$set_prop("content", "General introduction for all stability studies.")
+tmp$save()
+
+# Добавляем стандартные секции
+sec_results <- add_child(tmp, "TPL_RESULTS", "Results Table")
+sec_results$set_table("table_data", data.frame(Time=c(0,3,6), Result=c("NP","NP","NP")))
+sec_results$save()
+
+add_child(tmp, "TPL_CONCLUSION", "Conclusion")
+message("Template created.")
+
+doc_drug_x <- instantiate_template(
+  template_id = "TPL_STABILITY",
+  new_root_id = "STAB_DRUGX_2024",
+  new_label = "Stability Report: Insulin Drug-X (Batch B2024)",
+  con = con
+)
+
+cat(doc_drug_x$render())
+
+print_tree(doc_drug_x)
+
+
+dbDisconnect(con)
+
+# cross ------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
+
+# --- ДОКУМЕНТ 1: ПРОТОКОЛ ---
+prot <- DocumentInstance$new("PROT_001", con, "Master Protocol", "Document")
+prot$set_prop("limit", "not more than 0.5%")
+prot$save()
+
+# --- ДОКУМЕНТ 2: ОТЧЕТ ---
+rep <- DocumentInstance$new("REP_001", con, "Final Report", "Document")
+# Мы ссылаемся на название протокола и на его метаданные
+rep$set_prop("content", "As defined in [[REF:PROT_001]], the acceptance limit is [[VAL:PROT_001:limit]].")
+rep$save()
+
+# --- РЕЗУЛЬТАТ ---
+cat(rep$render())
+
+dbDisconnect(con)
+
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------

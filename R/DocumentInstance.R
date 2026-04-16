@@ -15,6 +15,10 @@ DocumentInstance <- R6::R6Class(
   inherit = Entity,
 
   public = list(
+    initialize = function(id, con, label = NULL, class_id = "Document") {
+      # super$initialize вызывает конструктор родительского класса Entity
+      super$initialize(id, con, label, class_id)
+    },
 
     render = function(level = 1) {
       message("Assembling document: ", self$label)
@@ -28,22 +32,35 @@ DocumentInstance <- R6::R6Class(
       lbl <- .fill_placeholders(self$label, context)
       doc_text <- paste0(header_prefix, " ", lbl, "\n\n")
 
-      # 3. Версия (если есть)
+      # 3. Версия
       version <- self$get_prop("version")
       if (!is.null(version) && !is.na(version)) {
         doc_text <- paste0(doc_text, "*Version: ", version, "*\n\n")
       }
 
-      # 4. Основной текст корня
+      # 4. Основной текст корня (Intro)
       root_content <- self$get_prop("content")
       if (!is.null(root_content)) {
         doc_text <- paste0(doc_text, .fill_placeholders(root_content, context), "\n\n")
       }
 
-      # 5. Сборка дочерних секций (передаем context)
+      # 5. Сборка ВСЕХ дочерних секций
       content_parts <- self$assemble_sections(self$id, level = level + 1, context = context)
 
-      return(paste0(doc_text, content_parts))
+      # Объединяем основной текст и секции
+      full_output <- paste0(doc_text, content_parts)
+
+      # 6. Добавляем таблицу подписей в самый КОНЕЦ документа
+      sigs <- self$get_signatures()
+      if (nrow(sigs) > 0) {
+        full_output <- paste0(full_output, "\n\n---\n### Electronic Signatures\n\n")
+        # Генерируем таблицу (Markdown pipe table)
+        sig_table <- knitr::kable(sigs, format = "pipe")
+        full_output <- paste0(full_output, paste(sig_table, collapse = "\n"), "\n\n")
+      }
+
+      full_output <- .resolve_cross_refs(full_output, self$con)
+      return(full_output)
     },
 
     assemble_sections = function(parent_id, level, context) { # Добавили context в аргументы!
@@ -264,6 +281,40 @@ DocumentInstance <- R6::R6Class(
       message("Version bumped to: ", new_v)
       self$save()
       return(new_v)
+    },
+
+    #' @description
+    #' Sign the document version.
+    #' @param role Character. "Author", "Reviewer", or "Approver".
+    #' @param meaning Character. Reason for signing.
+    sign = function(role, meaning = "I approve this document") {
+      curr_user <- Sys.getenv("DONTOLOGY_USER", unset = Sys.info()[["user"]])
+      curr_ver <- self$get_prop("version")
+
+      # Записываем подпись в базу
+      DBI::dbExecute(self$con,
+                     "INSERT INTO signatures (instance_id, version, user_id, role, meaning)
+         VALUES (?, ?, ?, ?, ?)",
+                     params = list(self$id, curr_ver, curr_user, role, meaning)
+      )
+
+      message("Document ", self$id, " (v", curr_ver, ") signed by ", curr_user, " as ", role)
+
+      # Если подписал Approver — автоматически финализируем документ
+      if (toupper(role) == "APPROVER") {
+        self$set_prop("status", "FINAL")
+        self$save()
+        message("Document is now FINAL and LOCKED.")
+      }
+    },
+
+    #' @description
+    #' Get all signatures for this document.
+    get_signatures = function() {
+      DBI::dbGetQuery(self$con,
+                      "SELECT user_id, role, version, timestamp, meaning
+         FROM signatures WHERE instance_id = ? ORDER BY timestamp ASC",
+                      params = list(self$id))
     }
   )
 )

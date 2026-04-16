@@ -75,6 +75,17 @@ create_schema <- function(con) {
     DBI::dbExecute(con, "INSERT OR IGNORE INTO ont_properties (property_id, value_type) VALUES (?, 'text')", params = list(prp))
   }
 
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS signatures (
+    signature_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT,
+    version TEXT,
+    user_id TEXT,
+    role TEXT,         -- Author, Reviewer, Approver
+    meaning TEXT,      -- 'I am the author', 'I approve this document'
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
+  );")
+
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS audit_log (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
     instance_id TEXT,

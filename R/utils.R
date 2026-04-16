@@ -25,8 +25,12 @@
 #' @noRd
 .instantiate_entity <- function(id, con) {
   res <- DBI::dbGetQuery(con, "SELECT class_id FROM instances WHERE instance_id = ?", params = list(id))
-  if (nrow(res) > 0 && res$class_id[1] == "Document") {
-    return(DocumentInstance$new(id, con))
+
+  if (nrow(res) > 0) {
+    cls <- res$class_id[1]
+    if (toupper(cls) == "DOCUMENT") {
+      return(DocumentInstance$new(id, con))
+    }
   }
   return(Entity$new(id, con))
 }
@@ -44,5 +48,44 @@
     value <- as.character(metadata[[key]])
     text <- gsub(pattern, value, text)
   }
+  return(text)
+}
+
+#' Resolve Cross-References between documents
+#' @param text Text containing [[REF:ID]] or [[VAL:ID:prop]]
+#' @param con Database connection
+.resolve_cross_refs <- function(text, con) {
+  if (is.null(text) || is.na(text) || nchar(text) == 0) return(text)
+
+  # 1. Обработка [[REF:ID]] -> заменяется на Label этого объекта
+  # Регулярка ищет [[REF:любой_ID]]
+  ref_matches <- regmatches(text, gregexpr("\\[\\[REF:[^\\]]+\\]\\]", text))[[1]]
+  for (match in ref_matches) {
+    target_id <- gsub("\\[\\[REF:|\\]\\]", "", match)
+    res <- DBI::dbGetQuery(con, "SELECT label FROM instances WHERE instance_id = ?", params = list(target_id))
+
+    if (nrow(res) > 0) {
+      # Создаем ссылку на секцию (даже если она в другом файле, Pandoc это обработает)
+      replacement <- paste0("[", res$label, "](#sec-", target_id, ")")
+      text <- gsub(match, replacement, text, fixed = TRUE)
+    }
+  }
+
+  # 2. Обработка [[VAL:ID:property]] -> заменяется на значение метаданных
+  val_matches <- regmatches(text, gregexpr("\\[\\[VAL:[^:\\]]+:[^\\]]+\\]\\]", text))[[1]]
+  for (match in val_matches) {
+    parts <- unlist(strsplit(gsub("\\[\\[VAL:|\\]\\]", "", match), ":"))
+    target_id <- parts[1]
+    prop_id <- parts[2]
+
+    res <- DBI::dbGetQuery(con,
+                           "SELECT value FROM attributes WHERE instance_id = ? AND property_id = ?",
+                           params = list(target_id, prop_id))
+
+    if (nrow(res) > 0) {
+      text <- gsub(match, res$value, text, fixed = TRUE)
+    }
+  }
+
   return(text)
 }

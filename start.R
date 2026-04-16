@@ -28,6 +28,8 @@ usethis::use_r("export")
 usethis::use_r("utils")
 usethis::use_r("diff")
 usethis::use_r("report_gen")
+usethis::use_r("templates")
+usethis::use_r("data_ingestion")
 
 
 usethis::use_test("DocumentInstance")
