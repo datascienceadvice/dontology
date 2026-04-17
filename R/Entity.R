@@ -238,6 +238,56 @@ Entity <- R6::R6Class(
       return(res)
     },
 
+
+    #' @description
+    #' Detects logical contradictions between local metadata and inherited context.
+    #' @return A data.frame of detected conflicts.
+    find_contradictions = function() {
+      conflicts <- data.frame(
+        instance_id = character(),
+        property_id = character(),
+        local_value = character(),
+        inherited_value = character(),
+        severity = character(),
+        stringsAsFactors = FALSE
+      )
+
+      # 1. Получаем список свойств, требующих строгой консистентности
+      rules <- DBI::dbGetQuery(self$con, "SELECT property_id, severity FROM ont_consistency_rules")
+      if (nrow(rules) == 0) return(conflicts)
+
+      # 2. Ищем родителя, чтобы получить его контекст
+      query <- "SELECT subject_id FROM relations WHERE object_id = ? AND predicate_id = 'contains' LIMIT 1"
+      res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
+
+      if (nrow(res) > 0) {
+        parent <- .instantiate_entity(res$subject_id[1], self$con)
+        # Получаем контекст, накопленный всеми родителями выше
+        inherited_context <- parent$get_context()
+
+        for (i in seq_len(nrow(rules))) {
+          prop <- rules$property_id[i]
+          local_val <- self$get_prop(prop)
+          inherited_val <- inherited_context[[prop]]
+
+          # Если свойство задано и тут, и там, но они разные — это конфликт!
+          if (!is.null(local_val) && !is.null(inherited_val)) {
+            if (as.character(local_val) != as.character(inherited_val)) {
+              conflicts <- rbind(conflicts, data.frame(
+                instance_id = self$id,
+                property_id = prop,
+                local_value = as.character(local_val),
+                inherited_value = as.character(inherited_val),
+                severity = rules$severity[i],
+                stringsAsFactors = FALSE
+              ))
+            }
+          }
+        }
+      }
+      return(conflicts)
+    },
+
     #' @description
     #' Validates that metadata values match the types defined in the ontology.
     validate_ontology_types = function() {
@@ -322,6 +372,30 @@ Entity <- R6::R6Class(
       return(FALSE)
     },
 
+    calculate_current_hash = function() {
+      # Собираем все данные объекта в одну строку для хеширования
+      state_string <- paste0(
+        self$label,
+        self$class_id,
+        jsonlite::toJSON(self$metadata, auto_unbox = TRUE, sort_keys = TRUE),
+        jsonlite::toJSON(self$relations, auto_unbox = TRUE, sort_keys = TRUE)
+      )
+      return(digest::digest(state_string, algo = "sha256"))
+    },
+
+    verify_checksum = function() {
+      # Берем хеш из базы
+      res <- DBI::dbGetQuery(self$con, "SELECT checksum FROM instances WHERE instance_id = ?", params = list(self$id))
+      if (nrow(res) == 0 || is.na(res$checksum[1])) return(TRUE) # Еще не сохранялся
+
+      current_hash <- self$calculate_current_hash()
+      if (current_hash != res$checksum[1]) {
+        warning("DATA INTEGRITY CRITICAL: External modification detected for ", self$id)
+        return(FALSE)
+      }
+      return(TRUE)
+    },
+
     #' @description
     #' Load instance state from the SQLite database.
     load = function() {
@@ -368,6 +442,14 @@ Entity <- R6::R6Class(
 
       # Get current system user
       curr_user <- Sys.getenv("DONTOLOGY_USER", unset = Sys.info()[["user"]])
+
+      # 1. Перед сохранением загружаем старое состояние из базы для сравнения
+      old_state <- .instantiate_entity(self$id, self$con)
+      # Получаем таблицу изменений
+      diff_log <- diff_entities(old_state, self)
+
+      # Превращаем diff в компактный JSON
+      delta_json <- if(nrow(diff_log) > 0) jsonlite::toJSON(diff_log) else "No changes"
 
       tryCatch({
         DBI::dbWithTransaction(self$con, {
@@ -418,10 +500,15 @@ Entity <- R6::R6Class(
             }
           }
 
+          # 3. Обновляем контрольную сумму (checksum)
+          new_checksum <- self$calculate_current_hash()
+          DBI::dbExecute(self$con, "UPDATE instances SET checksum = ? WHERE instance_id = ?",
+                         params = list(new_checksum, self$id))
+
+          # 4. Записываем в аудит детальный лог
           DBI::dbExecute(self$con,
-                         "INSERT INTO audit_log (instance_id, user_id, action) VALUES (?, ?, ?)",
-                         params = list(self$id, curr_user, action_type)
-          )
+                         "INSERT INTO audit_log (instance_id, user_id, action, delta) VALUES (?, ?, ?, ?)",
+                         params = list(self$id, curr_user, if(nrow(diff_log) > 0) "UPDATE" else "CREATE", delta_json))
         })
       }, error = function(e) {
         stop(paste0("FAIL TO SAVE [", self$id, "]: ", e$message))

@@ -25,6 +25,7 @@ create_schema <- function(con) {
     instance_id TEXT PRIMARY KEY,
     class_id TEXT,
     label TEXT,
+    checksum TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -80,9 +81,10 @@ create_schema <- function(con) {
     instance_id TEXT,
     version TEXT,
     user_id TEXT,
-    role TEXT,         -- Author, Reviewer, Approver
-    meaning TEXT,      -- 'I am the author', 'I approve this document'
+    role TEXT,
+    meaning TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    content_hash TEXT,    -- <--- НОВАЯ КОЛОНКА ДЛЯ ХЕША
     FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
   );")
 
@@ -94,4 +96,15 @@ create_schema <- function(con) {
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
   );")
+
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS ont_consistency_rules (
+    property_id TEXT PRIMARY KEY,
+    severity TEXT -- 'ERROR' или 'WARNING'
+  );")
+
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS ont_relation_rules (
+    subject_class TEXT,
+    predicate_id TEXT,
+    object_class TEXT
+  )")
 }

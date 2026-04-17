@@ -72,8 +72,8 @@ import_from_json <- function(file_path, con) {
   }
 
   # Load JSON data into a nested list
-  json_text <- readLines(file_path, warn = FALSE, encoding = "UTF-8")
-  data <- jsonlite::fromJSON(file_path, simplifyVector = FALSE)
+  json_text <- paste(readLines(file_path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  data <- jsonlite::fromJSON(json_text, simplifyVector = FALSE)
 
   # Recursive internal function to persist nodes and relations to the database
   restore_node <- function(node, parent_id = NULL, order = 0) {

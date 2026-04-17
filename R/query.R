@@ -56,6 +56,73 @@ find_by_attribute <- function(con, property_id, value) {
   lapply(res$instance_id, function(id) Entity$new(id, con))
 }
 
+#' Semantic Search by Class
+#' @description Finds instances of a class and all its subclasses.
+#' @export
+find_by_class_deep <- function(con, target_class) {
+  # 1. Сначала найдем все подклассы (рекурсивно)
+  get_subclasses <- function(cls) {
+    query <- "SELECT class_id FROM ont_classes WHERE parent_class_id = ?"
+    sub <- DBI::dbGetQuery(con, query, params = list(cls))$class_id
+    if (length(sub) == 0) return(cls)
+    return(c(cls, unlist(lapply(sub, get_subclasses))))
+  }
+
+  all_relevant_classes <- unique(get_subclasses(target_class))
+
+  # 2. Ищем все инстанции этих классов
+  sql <- sprintf(
+    "SELECT instance_id, class_id, label FROM instances WHERE class_id IN (%s)",
+    paste(DBI::dbQuoteString(con, all_relevant_classes), collapse = ",")
+  )
+
+  res <- DBI::dbGetQuery(con, sql)
+  return(res)
+}
+
+#' Find Orphan Entities
+#' @description Finds entities that are not contained by any other entity.
+#' @export
+find_orphans <- function(con) {
+  query <- "
+    SELECT instance_id, label, class_id
+    FROM instances
+    WHERE instance_id NOT IN (
+      SELECT object_id FROM relations WHERE predicate_id = 'contains'
+    )
+    AND class_id != 'Document'" # Документы сами по себе корни, они не сироты
+
+  return(DBI::dbGetQuery(con, query))
+}
+
+#' Semantic Attribute Search (with Inheritance)
+#' @description Finds entities where a property matches a value,
+#' either directly or via inheritance from a parent.
+#' @export
+find_semantic_attribute <- function(con, property_id, value) {
+  # 1. Находим все сущности, у которых этот атрибут прописан явно
+  query <- "SELECT instance_id FROM attributes WHERE property_id = ? AND value = ?"
+  direct_hits <- DBI::dbGetQuery(con, query, params = list(property_id, value))$instance_id
+
+  if (length(direct_hits) == 0) return(NULL)
+
+  # 2. Для каждой найденной сущности найдем всех её "потомков"
+  # (т.к. они наследуют это свойство семантически)
+  get_all_descendants <- function(parent_id) {
+    q <- "SELECT object_id FROM relations WHERE subject_id = ? AND predicate_id = 'contains'"
+    children <- DBI::dbGetQuery(con, q, params = list(parent_id))$object_id
+    if (length(children) == 0) return(parent_id)
+    return(c(parent_id, unlist(lapply(children, get_all_descendants))))
+  }
+
+  all_affected_ids <- unique(unlist(lapply(direct_hits, get_all_descendants)))
+
+  # Возвращаем информацию об этих объектах
+  sql <- sprintf("SELECT instance_id, label, class_id FROM instances WHERE instance_id IN (%s)",
+                 paste(DBI::dbQuoteString(con, all_affected_ids), collapse = ","))
+  return(DBI::dbGetQuery(con, sql))
+}
+
 #' Impact Analysis: Where is this object used?
 #'
 #' @description

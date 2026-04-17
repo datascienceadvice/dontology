@@ -601,37 +601,52 @@ dbDisconnect(con)
 
 # ------------------------------------------------------------------------------
 con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
+# 1. Настраиваем правило в онтологии
+DBI::dbExecute(con, "INSERT INTO ont_consistency_rules VALUES ('drug_name', 'ERROR')")
+
+# 2. Создаем документ для Aspirin
+doc <- DocumentInstance$new("DOC_01", con, "Aspirin Study")
+doc$set_prop("drug_name", "Aspirin")
+doc$save()
+
+# 3. Создаем секцию и КТО-ТО ОШИБСЯ: написал другое лекарство в метаданных
+sec <- add_child(doc, "SEC_01", "Lab Results")
+sec$set_prop("drug_name", "Paracetamol") # ПРОТИВОРЕЧИЕ!
+sec$save()
+
+# 4. Запускаем валидацию
+doc$validate()
+dbDisconnect(con)
+
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
 
 dbDisconnect(con)
 # ------------------------------------------------------------------------------
 con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
 
 dbDisconnect(con)
 # ------------------------------------------------------------------------------
 con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
 
 dbDisconnect(con)
 # ------------------------------------------------------------------------------
 con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
 
 dbDisconnect(con)
 # ------------------------------------------------------------------------------
 con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
 
 dbDisconnect(con)
 # ------------------------------------------------------------------------------
 con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
-
-dbDisconnect(con)
-# ------------------------------------------------------------------------------
-con <- dbConnect(SQLite(), ":memory:")
-create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
 
 dbDisconnect(con)
 
