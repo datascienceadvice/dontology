@@ -75,6 +75,35 @@ Entity <- R6::R6Class(
     #' @param sort_order Integer. Position for ordered relations.
     #' @return The current Entity object (invisibly).
     add_relation = function(predicate, object_id, sort_order = 0) {
+      # ОНТОЛОГИЧЕСКАЯ ПРОВЕРКА
+      target <- .instantiate_entity(object_id, self$con)
+
+      # Проверяем, есть ли правила для этого предиката
+      rules <- DBI::dbGetQuery(self$con,
+                               "SELECT object_class FROM ont_relation_rules WHERE subject_class = ? AND predicate_id = ?",
+                               params = list(self$class_id, predicate))
+
+      if (nrow(rules) > 0) {
+        # Проверяем, подходит ли объект под разрешенные классы (используя наш новый is_a)
+        is_allowed <- any(sapply(rules$object_class, function(cls) target$is_a(cls)))
+
+        if (!is_allowed) {
+          stop(sprintf("Ontology Violation: %s cannot '%s' a %s (Expected: %s)",
+                       self$class_id, predicate, target$class_id, paste(rules$object_class, collapse = "/")))
+        }
+      }
+
+      if (predicate == "contains") {
+        # Создаем временный объект ребенка для проверки
+        child_obj <- .instantiate_entity(object_id, self$con)
+
+        # Если ребенок уже является предком для текущего объекта (self)
+        if (child_obj$is_ancestor_of(self$id)) {
+          stop(sprintf("INTEGRITY ERROR: Circular reference detected! '%s' is already an ancestor of '%s'.",
+                       object_id, self$id))
+        }
+      }
+
       if (is.null(self$relations[[predicate]])) {
         # Initialize data frame with column names matching the database schema
         self$relations[[predicate]] <- data.frame(
@@ -94,6 +123,67 @@ Entity <- R6::R6Class(
         self$relations[[predicate]] <- rbind(self$relations[[predicate]], new_rel)
       }
       invisible(self)
+    },
+
+    #' @description
+    #' Find all entities that point to this entity via any predicate.
+    #' @return A data.frame with subject_id, predicate_id, and the instantiated R6 objects.
+    get_incoming_relations = function() {
+      query <- "
+        SELECT subject_id, predicate_id
+        FROM relations
+        WHERE object_id = ?"
+
+      res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
+
+      if (nrow(res) == 0) return(NULL)
+
+      # Добавляем колонку с готовыми R6 объектами для удобства манипуляции
+      res$subject_obj <- lapply(res$subject_id, function(sid) {
+        .instantiate_entity(sid, self$con)
+      })
+
+      return(res)
+    },
+
+    #' @description
+    #' Get a property, searching up the hierarchy if not found locally.
+    #' @param key Character. The property ID to find.
+    get_prop_inherited = function(key) {
+      # 1. Пробуем найти у себя
+      val <- self$get_prop(key)
+      if (!is.null(val) && !is.na(val) && val != "") return(val)
+
+      # 2. Если нет, ищем родителя через связь 'contains'
+      query <- "SELECT subject_id FROM relations WHERE object_id = ? AND predicate_id = 'contains' LIMIT 1"
+      res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
+
+      if (nrow(res) > 0) {
+        # Рекурсивно запрашиваем у родителя
+        parent <- .instantiate_entity(res$subject_id[1], self$con)
+        return(parent$get_prop_inherited(key))
+      }
+      return(NULL)
+    },
+
+    #' @description
+    #' Build a merged metadata context (parent properties + local properties).
+    #' Local properties override parent properties.
+    get_context = function() {
+      # Ищем родителя
+      query <- "SELECT subject_id FROM relations WHERE object_id = ? AND predicate_id = 'contains' LIMIT 1"
+      res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
+
+      parent_context <- list()
+      if (nrow(res) > 0) {
+        parent <- .instantiate_entity(res$subject_id[1], self$con)
+        parent_context <- parent$get_context()
+      }
+
+      # Объединяем: контекст родителя + наши данные (наши затирают родительские)
+      # modifyList — удобная функция для слияния списков
+      combined_context <- utils::modifyList(parent_context, self$metadata)
+      return(combined_context)
     },
 
     #' @description
@@ -146,6 +236,90 @@ Entity <- R6::R6Class(
 
       res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
       return(res)
+    },
+
+    #' @description
+    #' Validates that metadata values match the types defined in the ontology.
+    validate_ontology_types = function() {
+      keys <- names(self$metadata)
+      if (length(keys) == 0) return(TRUE)
+
+      # 1. Получаем определения типов из онтологии для текущих ключей
+      sql <- sprintf(
+        "SELECT property_id, value_type FROM ont_properties WHERE property_id IN (%s)",
+        paste0("'", keys, "'", collapse = ",")
+      )
+      rules <- DBI::dbGetQuery(self$con, sql)
+
+      if (nrow(rules) == 0) return(TRUE) # Нет правил — нет проблем
+
+      is_valid <- TRUE
+
+      for (i in seq_len(nrow(rules))) {
+        prop <- rules$property_id[i]
+        type <- rules$value_type[i]
+        val <- self$metadata[[prop]]
+
+        if (is.null(val) || is.na(val) || val == "") next
+
+        # 2. Проверка типов
+        valid_type <- switch(type,
+                             "numeric" = !is.na(suppressWarnings(as.numeric(val))),
+                             "date"    = !is.na(suppressWarnings(as.Date(as.character(val)))),
+                             "boolean" = toupper(as.character(val)) %in% c("TRUE", "FALSE", "1", "0", "YES", "NO"),
+                             "text"    = TRUE,
+                             TRUE # По умолчанию верим, если тип неизвестен
+        )
+
+        if (!valid_type) {
+          warning(sprintf("Ontology Type Mismatch: Property '%s' in '%s' expects %s, but got '%s'",
+                          prop, self$id, type, val))
+          is_valid <- FALSE
+        }
+      }
+      return(is_valid)
+    },
+
+    #' @description
+    #' Check if the entity belongs to a class or any of its subclasses (Ontological "is-a").
+    #' @param target_class_id The class ID to check against.
+    is_a = function(target_class_id) {
+      if (self$class_id == target_class_id) return(TRUE)
+
+      # Рекурсивно проверяем иерархию классов в таблице ont_classes
+      check_parent = function(current_class) {
+        query <- "SELECT parent_class_id FROM ont_classes WHERE class_id = ?"
+        res <- DBI::dbGetQuery(self$con, query, params = list(current_class))
+
+        if (nrow(res) == 0 || is.na(res$parent_class_id[1])) return(FALSE)
+        if (res$parent_class_id[1] == target_class_id) return(TRUE)
+
+        return(check_parent(res$parent_class_id[1]))
+      }
+
+      return(check_parent(self$class_id))
+    },
+
+    #' @description
+    #' Check if adding a relation would create a circular dependency.
+    #' @param potential_child_id The ID of the entity we want to add as a child.
+    is_ancestor_of = function(potential_child_id) {
+      # 1. Ищем всех родителей текущего объекта (кто содержит нас?)
+      query <- "SELECT subject_id FROM relations WHERE object_id = ? AND predicate_id = 'contains'"
+      res <- DBI::dbGetQuery(self$con, query, params = list(self$id))
+
+      if (nrow(res) == 0) return(FALSE)
+
+      # 2. Если среди наших родителей есть тот, кого мы хотим добавить в дети - это цикл!
+      if (potential_child_id %in% res$subject_id) return(TRUE)
+
+      # 3. Рекурсивно проверяем родителей наших родителей
+      for (parent_id in res$subject_id) {
+        parent_obj <- .instantiate_entity(parent_id, self$con)
+        if (parent_obj$is_ancestor_of(potential_child_id)) return(TRUE)
+      }
+
+      return(FALSE)
     },
 
     #' @description

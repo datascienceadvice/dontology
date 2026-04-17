@@ -75,13 +75,21 @@ DocumentInstance <- R6::R6Class(
         cid <- res$object_id[i]
         section <- .instantiate_entity(cid, self$con)
 
+
+        # КЛЮЧЕВОЙ МОМЕНТ:
+        # Каждая секция получает обновленный контекст:
+        # то, что пришло сверху + её собственные метаданные
+        local_context <- utils::modifyList(context, section$metadata)
+        # Добавляем системные переменные
+        local_context$current_date <- as.character(Sys.Date())
+
         if (inherits(section, "DocumentInstance") && section$id != self$id) {
           # Вложенный документ: рендерим его, передавая текущий уровень
           output <- paste0(output, section$render(level = level))
         } else {
           # Обычная секция: обрабатываем текст с плейсхолдерами
-          sec_label <- .fill_placeholders(section$label, context)
-          content <- .fill_placeholders(section$get_prop("content"), context)
+          sec_label <- .fill_placeholders(section$label, local_context)
+          content <- .fill_placeholders(section$get_prop("content"), local_context)
 
           # Header
           header_prefix <- paste(rep("#", level), collapse = "")
@@ -113,7 +121,7 @@ DocumentInstance <- R6::R6Class(
           }
 
           # Рекурсия для глубоко вложенных секций (передаем context)
-          sub_content <- self$assemble_sections(cid, level + 1, context)
+          sub_content <- self$assemble_sections(cid, level + 1, local_context)
           output <- paste0(output, sub_content)
         }
       }
@@ -133,9 +141,9 @@ DocumentInstance <- R6::R6Class(
 
       # 1. Валидация внутренних ссылок (Referential Integrity)
       # Этот метод мы определили отдельно, он ищет битые #sec-ID
-      if (!self$validate_links()) {
-        is_valid <- FALSE
-      }
+      if (!self$validate_links()) is_valid <- FALSE
+
+      if (!self$validate_ontology_types()) is_valid <- FALSE
 
       # 2. Проверка обязательных онтологических классов
       query_req <- "SELECT required_child_class_id FROM ont_constraints WHERE parent_class_id = ?"
@@ -165,20 +173,23 @@ DocumentInstance <- R6::R6Class(
             if (!child_obj$validate()) {
               is_valid <- FALSE
             }
-          }
+          } else {
 
-          # ПРОВЕРКА НА ПУСТОТУ
-          # Считаем секцию пустой, если в ней нет текста, таблиц, графиков И вложенных подсекций
-          has_text <- !is.null(child_obj$get_prop("content")) && nchar(trimws(child_obj$get_prop("content"))) > 0
-          has_table <- !is.null(child_obj$get_prop("table_data"))
-          has_plot <- !is.null(child_obj$get_prop("plot_path"))
+            if (!child_obj$validate_ontology_types()) is_valid <- FALSE
 
-          query_sub <- "SELECT COUNT(*) as count FROM relations WHERE subject_id = ? AND predicate_id = 'contains'"
-          has_sub <- DBI::dbGetQuery(self$con, query_sub, params = list(child_obj$id))$count > 0
+            # ПРОВЕРКА НА ПУСТОТУ
+            # Считаем секцию пустой, если в ней нет текста, таблиц, графиков И вложенных подсекций
+            has_text <- !is.null(child_obj$get_prop("content")) && nchar(trimws(child_obj$get_prop("content"))) > 0
+            has_table <- !is.null(child_obj$get_prop("table_data"))
+            has_plot <- !is.null(child_obj$get_prop("plot_path"))
 
-          if (!has_text && !has_table && !has_plot && !has_sub) {
-            warning("Section is empty: ", actual_children$label[i], " (ID: ", actual_children$instance_id[i], ")")
-            is_valid <- FALSE
+            query_sub <- "SELECT COUNT(*) as count FROM relations WHERE subject_id = ? AND predicate_id = 'contains'"
+            has_sub <- DBI::dbGetQuery(self$con, query_sub, params = list(child_obj$id))$count > 0
+
+            if (!has_text && !has_table && !has_plot && !has_sub) {
+              warning("Section is empty: ", actual_children$label[i], " (ID: ", actual_children$instance_id[i], ")")
+              is_valid <- FALSE
+            }
           }
         }
       }

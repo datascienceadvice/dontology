@@ -84,7 +84,18 @@ Ontology <- R6::R6Class(
                      params = list(parent_class_id, required_child_class_id))
       message("Constraint added: ", parent_class_id, " requires ", required_child_class_id)
     },
+    # В Ontology.R
+    add_relation_constraint = function(subject_class, predicate, object_class) {
+      # Создаем таблицу, если её нет
+      DBI::dbExecute(self$con, "CREATE TABLE IF NOT EXISTS ont_relation_rules (
+        subject_class TEXT,
+        predicate_id TEXT,
+        object_class TEXT
+      )")
 
+      DBI::dbExecute(self$con, "INSERT INTO ont_relation_rules VALUES (?, ?, ?)",
+                     params = list(subject_class, predicate, object_class))
+    },
     # --- Inspection Helpers ---
 
     #' @description

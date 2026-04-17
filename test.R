@@ -523,8 +523,118 @@ cat(rep$render())
 
 dbDisconnect(con)
 
+# types ------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
+
+ont <- Ontology$new(con)
+ont$add_property("potency", "numeric", "Concentration of active ingredient")
+ont$add_property("release_date", "date", "Date of batch release")
+ont$add_property("is_sterile", "boolean", "Sterility flag")
+
+# Задаем в онтологии, что 'potency' - это число
+ont$add_property("potency", "numeric")
+
+doc <- DocumentInstance$new("REP_01", con)
+# ОШИБКА: Записываем текст вместо числа
+doc$set_prop("potency", "Very High")
+doc$save()
+
+# Запускаем валидацию
+doc$validate()
+# Выдаст: WARNING: Ontology Type Mismatch: Property 'potency' expects numeric, but got 'Very High'
+
+dbDisconnect(con)
+
+# local context ----------------------------------------------------------------
+create_schema(con)
+
+# 1. В корневом документе задаем общие данные
+doc <- DocumentInstance$new("DOC_MAIN", con, "Report for {{drug}}")
+doc$set_prop("drug", "Aspirin")
+doc$set_prop("site", "Berlin Lab")
+doc$save()
+
+# 2. Создаем секцию без метаданных drug, но с метаданными site
+sec <- add_child(doc, "SEC_1", "Analysis at {{site}}")
+sec$set_prop("site", "Munich Lab") # Переопределяем местоположение
+sec$set_prop("content", "Testing {{drug}} in a new environment.")
+sec$save()
+
+# 3. Рендерим
+cat(doc$render())
+
+dbDisconnect(con)
+
+# incoming ---------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)
+
+# --- НАСТРОЙКА ОНТОЛОГИИ ---
+ont <- Ontology$new(con)
+ont$add_class("StandardClause", parent_class_id = "Section")
+
+# Правило: Документ может содержать ('contains') только объекты типа 'Section' (или их подклассы)
+ont$add_relation_constraint("Document", "contains", "Section")
+
+# --- РАБОТА С ОБЪЕКТАМИ ---
+doc <- DocumentInstance$new("DOC_1", con)
+clause <- Entity$new("CLAUSE_1", con, class_id = "StandardClause")
+clause$save()
+
+# 1. Проверка иерархии
+clause$is_a("Section") # TRUE (т.к. StandardClause наследник Section)
+
+# 2. Добавление связи (пройдет успешно, т.к. StandardClause is-a Section)
+doc$add_relation("contains", "CLAUSE_1")
+
+# 3. Попытка добавить Документ внутрь Документа (вызовет ошибку)
+# doc$add_relation("contains", "ANOTHER_DOC_ID") -> STOP: Ontology Violation
+
+# 4. ОБРАТНАЯ СВЯЗЬ
+# Спрашиваем у Клаузы: "Где ты используешься?"
+doc$save()
+usage <- clause$get_incoming_relations()
+print(usage$subject_id) # Выведет "DOC_1"
+
+dbDisconnect(con)
+
 # ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
 # ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
+# ------------------------------------------------------------------------------
+con <- dbConnect(SQLite(), ":memory:")
+create_schema(con)con <- dbConnect(SQLite(), ":memory:")
+
+dbDisconnect(con)
+
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
