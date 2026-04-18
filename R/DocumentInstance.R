@@ -16,16 +16,16 @@ DocumentInstance <- R6::R6Class(
 
   public = list(
     initialize = function(id, con, label = NULL, class_id = "Document") {
-      # super$initialize вызывает конструктор родительского класса Entity
-      super$initialize(id, con, label, class_id)
+      # super$initialize calls the parent Entity class constructor
+      super$initialize(id, con, label, class_id = "Document")
     },
 
-    render = function(level = 1, context = NULL) {
+    render = function(level = 1, context = NULL, include_signatures = TRUE) {
       message("Assembling document: ", self$label)
 
-      # 1. Подготовка контекста переменных
-      # Если контекст не передан (мы в корне), начинаем с собственных метаданных
-      # Если передан — объединяем с текущими
+      # 1. Prepare variable context
+      # If context is not passed (we are at root), start with our own metadata
+      # If passed — merge with current
       if (is.null(context)) {
         context <- self$metadata
       } else {
@@ -33,45 +33,46 @@ DocumentInstance <- R6::R6Class(
       }
       context$current_date <- as.character(Sys.Date())
 
-      # 2. Заголовок документа
+      # 2. Document header
       resolved_lbl <- .resolve_cross_refs(self$label, self$con)
       lbl <- .fill_placeholders(resolved_lbl, context)
 
       header_prefix <- paste(rep("#", level), collapse = "")
       doc_text <- paste0(header_prefix, " ", lbl, "\n\n")
 
-      # 3. Версия
+      # 3. Version
       version <- self$get_prop("version")
       if (!is.null(version) && !is.na(version)) {
         doc_text <- paste0(doc_text, "*Version: ", version, "*\n\n")
       }
 
-      # 4. Обработка КОРНЕВОГО КОНТЕНТА
+      # 4. Handle ROOT CONTENT
       root_content_raw <- self$get_prop("content")
       if (!is.null(root_content_raw)) {
         resolved_root <- .resolve_cross_refs(root_content_raw, self$con)
         doc_text <- paste0(doc_text, .fill_placeholders(resolved_root, context), "\n\n")
       }
 
-      # 5. Сборка дочерних секций
+      # 5. Assemble child sections
       content_parts <- self$assemble_sections(self$id, level = level + 1, context = context)
 
       full_output <- paste0(doc_text, content_parts)
 
-      # 6. Добавляем таблицу подписей в самый КОНЕЦ документа
-      sigs <- self$get_signatures()
-      if (nrow(sigs) > 0) {
-        full_output <- paste0(full_output, "\n\n---\n### Electronic Signatures\n\n")
-        # Генерируем таблицу (Markdown pipe table)
-        sig_table <- knitr::kable(sigs, format = "pipe")
-        full_output <- paste0(full_output, paste(sig_table, collapse = "\n"), "\n\n")
+      # 6. Append signature table at the very END of the document
+      if (include_signatures) {
+        sigs <- self$get_signatures()
+        if (nrow(sigs) > 0) {
+          full_output <- paste0(full_output, "\n\n---\n### Electronic Signatures\n\n")
+          sig_table <- knitr::kable(sigs, format = "pipe")
+          full_output <- paste0(full_output, paste(sig_table, collapse = "\n"), "\n\n")
+        }
       }
 
       full_output <- .resolve_cross_refs(full_output, self$con)
       return(full_output)
     },
 
-    assemble_sections = function(parent_id, level, context) { # Добавили context в аргументы!
+    assemble_sections = function(parent_id, level, context) { # Added context to arguments!
       pid <- as.character(parent_id)
       query <- "SELECT object_id FROM relations WHERE subject_id = ? AND predicate_id = 'contains' ORDER BY sort_order ASC"
       res <- DBI::dbGetQuery(self$con, query, params = list(pid))
@@ -83,58 +84,60 @@ DocumentInstance <- R6::R6Class(
         cid <- res$object_id[i]
         section <- .instantiate_entity(cid, self$con)
 
-        # КЛЮЧЕВОЙ МОМЕНТ:
-        # Каждая секция получает обновленный контекст:
-        # то, что пришло сверху + её собственные метаданные
+        # KEY MOMENT:
+        # Each section receives an updated context:
+        # what came from above + its own metadata
         local_context <- utils::modifyList(context %||% list(), section$metadata)
-        # Добавляем системные переменные
+        # Add system variables
         local_context$current_date <- as.character(Sys.Date())
 
         if (inherits(section, "DocumentInstance") && section$id != self$id) {
-          # Вложенный документ: рендерим его, передавая текущий уровень
+          # Nested document: render it, passing current level
           output <- paste0(output, section$render(level = level, context = local_context))
         } else {
-          # 1. Получаем «сырой» текст
+          # 1. Get "raw" text
           raw_label <- section$label %||% "Untitled"
           raw_content <- section$get_prop("content") %||% ""
 
-          # 2. СНАЧАЛА разрешаем кросс-референсы [[REF:...]] и [[VAL:...]]
-          # Это может принести в текст новые плейсхолдеры {{...}}
+          # 2. FIRST resolve cross-references [[REF:...]] and [[VAL:...]]
+          # This may bring new placeholders {{...}} into the text
           resolved_label <- .resolve_cross_refs(raw_label, self$con)
           resolved_content <- .resolve_cross_refs(raw_content, self$con)
 
-          # 3. ЗАТЕМ подставляем плейсхолдеры {{...}}
+          # 3. THEN substitute placeholders {{...}}
           sec_label <- .fill_placeholders(resolved_label, local_context)
           content <- .fill_placeholders(resolved_content, local_context)
 
-          # 4. Далее обычный рендеринг секции...
+          header_prefix <- paste(rep("#", level), collapse = "")
+          output <- paste0(output, header_prefix, " ", sec_label, " {#sec-", cid, "}\n\n")
 
+          # 4. Then proceed with normal section rendering...
           if (!is.null(content) && !is.na(content)) {
             output <- paste0(output, content, "\n\n")
           }
 
-          # Таблицы
+          # Tables
           table_json <- section$get_prop("table_data")
           if (!is.null(table_json) && !is.na(table_json)) {
             df <- jsonlite::fromJSON(table_json)
-            # Используем sec_label для заголовка таблицы
+            # Use sec_label for table caption
             md_table <- knitr::kable(df, format = "pipe", caption = sec_label)
             output <- paste0(output, paste(md_table, collapse = "\n"), "\n\n")
           }
 
-          # Графики
+          # Plots
           plot_path <- section$get_prop("plot_path")
           if (!is.null(plot_path) && !is.na(plot_path)) {
             abs_path <- normalizePath(plot_path, winslash = "/", mustWork = FALSE)
             output <- paste0(
               output,
               "::: {custom-style=\"Figure\"}\n",
-              "![", sec_label, "](", abs_path, ")\n", # Используем sec_label
+              "![", sec_label, "](", abs_path, ")\n", # Use sec_label
               ":::\n\n"
             )
           }
 
-          # Рекурсия для глубоко вложенных секций (передаем context)
+          # Recursion for deeply nested sections (pass context)
           sub_content <- self$assemble_sections(cid, level + 1, local_context)
           output <- paste0(output, sub_content)
         }
@@ -152,12 +155,12 @@ DocumentInstance <- R6::R6Class(
     validate = function() {
       message("--- Comprehensive Validation: ", self$label, " ---")
 
-      # Запускаем цепочку проверок
+      # Run validation chain
       results <- c(
-        self$validate_integrity(),   # Проверка хешей (изменения в обход системы)
-        self$validate_structure(),   # Онтология и иерархия
-        self$validate_content(),     # Тексты и ссылки
-        self$validate_consistency()  # Противоречия данных
+        self$validate_integrity(),   # Hash verification (changes bypassing the system)
+        self$validate_structure(),   # Ontology and hierarchy
+        self$validate_content(),     # Texts and links
+        self$validate_consistency()  # Data contradictions
       )
 
       is_valid <- all(results)
@@ -166,13 +169,13 @@ DocumentInstance <- R6::R6Class(
     },
 
     validate_integrity = function() {
-      # Проверяем, не менял ли кто-то базу напрямую (см. пункт 4 ниже)
-      # Метод будет определен в Entity
+      # Check if someone modified the database directly (see point 4 below)
+      # Method will be defined in Entity
       return(super$verify_checksum())
     },
 
     validate_structure = function() {
-      # Логика обязательных секций (ont_constraints)
+      # Mandatory sections logic (ont_constraints)
       query_req <- "SELECT required_child_class_id FROM ont_constraints WHERE parent_class_id = ?"
       required_classes <- DBI::dbGetQuery(self$con, query_req, params = list(self$class_id))$required_child_class_id
 
@@ -191,9 +194,9 @@ DocumentInstance <- R6::R6Class(
     validate_content = function() {
       message("Checking content and recursive structure...")
       links_ok <- self$validate_links()
-      is_valid <- TRUE # Локальный флаг для этого метода
+      is_valid <- TRUE # Local flag for this method
 
-      # Получаем список детей для проверки на пустоту и рекурсии
+      # Get list of children for emptiness and recursion checks
       query_act <- "
         SELECT class_id, instance_id, label
         FROM relations r
@@ -205,14 +208,14 @@ DocumentInstance <- R6::R6Class(
         for (i in seq_len(nrow(actual_children))) {
           child_obj <- .instantiate_entity(actual_children$instance_id[i], self$con)
 
-          # РЕКУРСИЯ
+          # RECURSION
           if (inherits(child_obj, "DocumentInstance")) {
             if (!child_obj$validate()) is_valid <- FALSE
           } else {
-            # Проверка типов в секции
+            # Type validation in section
             if (!child_obj$validate_ontology_types()) is_valid <- FALSE
 
-            # ПРОВЕРКА НА ПУСТОТУ
+            # EMPTY CHECK
             has_text <- !is.null(child_obj$get_prop("content")) && nchar(trimws(child_obj$get_prop("content"))) > 0
             has_table <- !is.null(child_obj$get_prop("table_data"))
             has_plot <- !is.null(child_obj$get_prop("plot_path"))
@@ -227,19 +230,19 @@ DocumentInstance <- R6::R6Class(
           }
         }
       }
-      # Возвращаем комбинированный результат
+      # Return combined result
       return(is_valid && links_ok)
     },
 
     validate_consistency = function() {
       message("Checking semantic consistency...")
 
-      # Вспомогательная функция для сбора конфликтов
-      # Выносим её, чтобы не плодить вложенность
+      # Helper function to collect conflicts
+      # Extracted to avoid deep nesting
       collect_conflicts <- function(ent) {
         conflicts_df <- ent$find_contradictions()
 
-        # Получаем ID детей напрямую из связей, чтобы не плодить лишние объекты
+        # Get child IDs directly from relations to avoid creating extra objects
         child_ids <- DBI::dbGetQuery(ent$con,
                                      "SELECT object_id FROM relations WHERE subject_id = ? AND predicate_id = 'contains'",
                                      params = list(ent$id))$object_id
@@ -254,7 +257,7 @@ DocumentInstance <- R6::R6Class(
       all_conflicts <- collect_conflicts(self)
 
       if (nrow(all_conflicts) > 0) {
-        # Группируем ошибки по критичности
+        # Group errors by severity
         has_errors <- any(all_conflicts$severity == "ERROR")
 
         for (i in seq_len(nrow(all_conflicts))) {
@@ -265,7 +268,7 @@ DocumentInstance <- R6::R6Class(
 
           if (all_conflicts$severity[i] == "ERROR") warning(msg) else message("ADVISORY: ", msg)
         }
-        return(!has_errors) # Возвращаем FALSE, если есть хоть один ERROR
+        return(!has_errors) # Return FALSE if there is at least one ERROR
       }
       return(TRUE)
     },
@@ -275,11 +278,11 @@ DocumentInstance <- R6::R6Class(
     validate_links = function() {
       message("Checking internal links for: ", self$label)
 
-      # 1. Собираем весь текст документа (рекурсивно)
+      # 1. Collect all document text (recursively)
       get_all_text <- function(entity) {
         text <- entity$get_prop("content") %||% ""
 
-        # Получаем детей
+        # Get children
         rel_df <- entity$relations$contains
         if (!is.null(rel_df) && nrow(rel_df) > 0) {
           for (cid in rel_df$object_id) {
@@ -292,14 +295,14 @@ DocumentInstance <- R6::R6Class(
 
       full_text <- get_all_text(self)
 
-      # 2. Ищем паттерны ссылок типа (#sec-ID)
-      # Регулярное выражение ищет то, что внутри (#sec-...)
+      # 2. Search for link patterns like (#sec-ID)
+      # Regular expression finds content inside (#sec-...)
       links <- regmatches(full_text, gregexpr("(?<=#sec-)[a-zA-Z0-9_-]+", full_text, perl = TRUE))[[1]]
       links <- unique(links)
 
       if (length(links) == 0) return(TRUE)
 
-      # 3. Проверяем наличие каждого ID в базе данных
+      # 3. Check that each ID exists in the database
       is_valid <- TRUE
       for (link_id in links) {
         res <- DBI::dbGetQuery(self$con, "SELECT 1 FROM instances WHERE instance_id = ?", params = list(link_id))
@@ -335,7 +338,7 @@ DocumentInstance <- R6::R6Class(
     #' Automatically increment the version of the document.
     #' @param type Character. "minor" (1.0 -> 1.1) or "major" (1.0 -> 2.0).
     bump_version = function(type = "minor") {
-      # Запрещаем менять версию, если статус FINAL
+      # Disallow version change if status is FINAL
       if (toupper(self$get_prop("status") %||% "") == "FINAL") {
         stop("Cannot bump version of a FINAL document. Set status to DRAFT first.")
       }
@@ -343,7 +346,7 @@ DocumentInstance <- R6::R6Class(
       current_v <- self$get_prop("version")
       if (is.null(current_v) || is.na(current_v)) current_v <- "0.0"
 
-      # Парсим версию (major.minor)
+      # Parse version (major.minor)
       parts <- as.numeric(unlist(strsplit(current_v, "\\.")))
       if (length(parts) < 2) parts <- c(parts, 0)
 
@@ -366,17 +369,17 @@ DocumentInstance <- R6::R6Class(
     #' @param role Character. "Author", "Reviewer", or "Approver".
     #' @param meaning Character. Reason for signing.
     sign = function(role, meaning = "I approve this document") {
-      # 1. Генерируем финальный контент (со всеми плейсхолдерами и кросс-ссылками)
-      rendered_text <- self$render()
+      # 1. Generate final content (with all placeholders and cross-references)
+      rendered_text <- self$render(include_signatures = FALSE)
 
-      # 2. Создаем уникальный "отпечаток" (SHA-256 хеш) этого текста
-      # Используем пакет digest. Если его нет: install.packages("digest")
+      # 2. Create unique "fingerprint" (SHA-256 hash) of this text
+      # Uses digest package. If missing: install.packages("digest")
       content_hash <- digest::digest(rendered_text, algo = "sha256")
 
       curr_user <- Sys.getenv("DONTOLOGY_USER", unset = Sys.info()[["user"]])
       curr_ver <- self$get_prop("version") %||% "0.0"
 
-      # 3. Записываем подпись ВМЕСТЕ С ХЕШЕМ в базу
+      # 3. Write signature WITH HASH to database
       DBI::dbExecute(self$con,
                      "INSERT INTO signatures (instance_id, version, user_id, role, meaning, content_hash)
          VALUES (?, ?, ?, ?, ?, ?)",
@@ -385,7 +388,7 @@ DocumentInstance <- R6::R6Class(
 
       message(sprintf("Document '%s' signed. Fingerprint: %s...", self$id, substr(content_hash, 1, 10)))
 
-      # 4. Если подписал Approver — блокируем документ
+      # 4. If Approver signed — lock the document
       if (toupper(role) == "APPROVER") {
         self$set_prop("status", "FINAL")
         self$save()
@@ -397,7 +400,7 @@ DocumentInstance <- R6::R6Class(
     #' Get all signatures for this document.
     get_signatures = function() {
       DBI::dbGetQuery(self$con,
-                      "SELECT user_id, role, version, timestamp, meaning
+                      "SELECT user_id, role, version, timestamp, meaning, content_hash
          FROM signatures WHERE instance_id = ? ORDER BY timestamp ASC",
                       params = list(self$id))
     },
@@ -415,11 +418,11 @@ DocumentInstance <- R6::R6Class(
         return(NULL)
       }
 
-      # Генерируем текущий хеш
-      current_content <- self$render()
+      # Generate current hash
+      current_content <- self$render(include_signatures = FALSE)
       current_hash <- digest::digest(current_content, algo = "sha256")
 
-      # Проверяем каждую подпись
+      # Verify each signature
       sigs$is_valid <- sigs$content_hash == current_hash
 
       if (any(!sigs$is_valid)) {

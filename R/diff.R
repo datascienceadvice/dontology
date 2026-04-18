@@ -4,11 +4,11 @@
 #' @param path Current breadcrumb path (e.g., "Report > Intro")
 #' @export
 diff_entities <- function(old_ent, new_ent, path = "") {
-  # Если путь не задан, используем лейбл объекта
-  current_path <- if(path == "") new_ent$label else path
+  # If path is not set, use object label
+  current_path <- if(path == "" || is.na(path)) new_ent$label %||% "Unlabeled" else path
 
   changes <- data.frame(
-    path = character(),      # ТУТ ТЕПЕРЬ ЕСТЬ PATH
+    path = character(),      # PATH IS NOW INCLUDED
     component = character(),
     key = character(),
     old_value = character(),
@@ -17,10 +17,10 @@ diff_entities <- function(old_ent, new_ent, path = "") {
     stringsAsFactors = FALSE
   )
 
-  # Функция-помощник для добавления строк
+  # Helper function to add rows
   add_change <- function(df, comp, key, old_v, new_v, stat) {
     rbind(df, data.frame(
-      path = current_path, # Записываем путь
+      path = current_path, # Record path
       component = comp, key = key,
       old_value = as.character(old_v),
       new_value = as.character(new_v),
@@ -29,27 +29,49 @@ diff_entities <- function(old_ent, new_ent, path = "") {
     ))
   }
 
-  # 1. Сравнение Label
-  if (old_ent$label != new_ent$label) {
-    changes <- add_change(changes, "Core", "label", old_ent$label, new_ent$label, "Changed")
+  # 1. Compare Label
+  if (!identical(old_ent$label, new_ent$label)) {
+    changes <- add_change(changes, "Core", "label", old_ent$label %||% "NULL", new_ent$label %||% "NULL", "Changed")
   }
 
-  # 2. Сравнение Метаданных
+  # 2. Compare Metadata
   all_keys <- union(names(old_ent$metadata), names(new_ent$metadata))
   for (key in all_keys) {
     old_val <- old_ent$get_prop(key)
     new_val <- new_ent$get_prop(key)
 
+    # Handle NULL cases
     if (is.null(old_val) && !is.null(new_val)) {
       changes <- add_change(changes, "Metadata", key, "NULL", new_val, "Added")
+      next
     } else if (!is.null(old_val) && is.null(new_val)) {
       changes <- add_change(changes, "Metadata", key, old_val, "NULL", "Removed")
-    } else if (!is.null(old_val) && !is.null(new_val) && old_val != new_val) {
+      next
+    } else if (is.null(old_val) && is.null(new_val)) {
+      # Both NULL, no change
+      next
+    }
+
+    # Handle NA cases (after NULL check, both are not NULL)
+    old_is_na <- is.na(old_val)
+    new_is_na <- is.na(new_val)
+
+    if (old_is_na && !new_is_na) {
+      changes <- add_change(changes, "Metadata", key, "NA", new_val, "Changed")
+      next
+    } else if (!old_is_na && new_is_na) {
+      changes <- add_change(changes, "Metadata", key, old_val, "NA", "Changed")
+      next
+    } else if (old_is_na && new_is_na) {
+      # Both NA, no change
+      next
+    } else if (!identical(old_val, new_val)) {
+      # Neither NULL nor NA, and values differ
       changes <- add_change(changes, "Metadata", key, old_val, new_val, "Changed")
     }
   }
 
-  # 3. Сравнение структуры (наличие детей)
+  # 3. Compare structure (presence of children)
   old_rel <- if(!is.null(old_ent$relations$contains)) old_ent$relations$contains$object_id else character(0)
   new_rel <- if(!is.null(new_ent$relations$contains)) new_ent$relations$contains$object_id else character(0)
 
@@ -66,13 +88,13 @@ diff_entities <- function(old_ent, new_ent, path = "") {
 #' Deep Recursive Comparison
 #' @export
 diff_hierarchy <- function(old_ent, new_ent, path = "") {
-  # Вызываем плоский дифф для текущего уровня
+  # Call flat diff for current level
   changes <- diff_entities(old_ent, new_ent, path)
 
-  # Определяем путь для передачи детям
-  current_path <- if(path == "" || is.na(path)) new_ent$label else path
+  # Define path to pass to children
+  current_path <- if(path == "" || is.na(path)) new_ent$label %||% "Unlabeled" else path
 
-  # Рекурсия по общим детям
+  # Recursion over common children
   old_rel <- if(!is.null(old_ent$relations$contains)) old_ent$relations$contains$object_id else character(0)
   new_rel <- if(!is.null(new_ent$relations$contains)) new_ent$relations$contains$object_id else character(0)
   common_ids <- intersect(old_rel, new_rel)
@@ -82,10 +104,10 @@ diff_hierarchy <- function(old_ent, new_ent, path = "") {
       o_child <- .instantiate_entity(cid, old_ent$con)
       n_child <- .instantiate_entity(cid, new_ent$con)
 
-      # Формируем путь: "Родитель > Ребенок"
-      child_path <- paste0(current_path, " > ", n_child$label)
+      # Form path: "Parent > Child"
+      child_path <- paste0(current_path, " > ", n_child$label %||% "Unlabeled")
 
-      # Рекурсивный вызов
+      # Recursive call
       child_changes <- diff_hierarchy(o_child, n_child, child_path)
       changes <- rbind(changes, child_changes)
     }
@@ -119,5 +141,3 @@ render_diff_markdown <- function(diff_df) {
 
   return(paste(lines, collapse = "\n"))
 }
-
-`%||%` <- function(a, b) if (!is.null(a)) a else b
